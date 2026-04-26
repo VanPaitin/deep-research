@@ -15,19 +15,17 @@ Requirements:
 - Call out trends, disagreements, limitations, and practical implications where relevant.
 - End with a concise conclusion and a short "Further Research" section.
 - Produce at least 1000 words in markdown.
+- You can also try to add relevant emojis to make the report more engaging, but don't overdo it.
+- Also try and render relevant images in markdown if it would be helpful for the reader, using the format `![alt text](image_url)`.
 """
-
 
 
 class Writer:
     def __init__(self, query: str):
         self.query = query
         self.agent = Agent(
-            name="Writer",
-            instructions=INSTRUCTIONS,
-            model="gpt-4o-mini"
+            name="Writer", instructions=INSTRUCTIONS, model="gpt-4o-mini"
         )
-
 
     async def run(self, search_results: list[str]):
         findings = "\n\n".join(search_results)
@@ -38,6 +36,8 @@ class Writer:
         report = ""
 
         async for event in response.stream_events():
-            if event.type == "raw_response_event" and isinstance(event.data, ResponseTextDeltaEvent):
+            if event.type == "raw_response_event" and isinstance(
+                event.data, ResponseTextDeltaEvent
+            ):
                 report += event.data.delta
                 yield report

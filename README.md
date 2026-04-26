@@ -1,8 +1,6 @@
 ---
 title: Deep_Research_with_MCP
 app_file: main.py
-sdk: gradio
-sdk_version: 5.49.1
 ---
 # Deep Research with MCP
 
@@ -14,6 +12,7 @@ This app recreates the deep-research workflow from `2_openai/community_contribut
 - Page inspection can use `mcp-server-fetch` when search snippets are not enough.
 - Completion alerts are sent through a local `deep_research/services/push_server.py` MCP server.
 - Email delivery has been removed.
+- The frontend is a Next.js app that talks to a FastAPI backend.
 
 ## Environment
 
@@ -30,10 +29,22 @@ uv sync
 uv run python main.py
 ```
 
+In another terminal:
+
+```bash
+nvm use
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The Next.js app calls the backend at `http://127.0.0.1:8000` by default. To use a different backend URL, set `NEXT_PUBLIC_API_URL`.
+
 ## Files
 
 - `main.py`: root entrypoint for the app
-- `deep_research/app.py`: Gradio UI and clarification flow
+- `deep_research/app.py`: FastAPI backend and clarification flow
+- `frontend/`: Next.js frontend
 - `deep_research/agents/clarifier.py`: clarification agent plus input guardrail
 - `deep_research/agents/planner.py`: search-plan generation
 - `deep_research/agents/searcher.py`: web research agent
