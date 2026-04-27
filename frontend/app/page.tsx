@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useRef, useState } from "react";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 
 import { AppHeader } from "../components/app-header";
@@ -17,6 +18,7 @@ const examples = [
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export default function Home() {
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [statusLog, setStatusLog] = useState<string[]>([]);
@@ -39,6 +41,17 @@ export default function Home() {
       return;
     }
 
+    if (!isLoaded || !isSignedIn) {
+      setError("Sign in to save and run research reports.");
+      return;
+    }
+
+    const token = await getToken();
+    if (!token) {
+      setError("Could not read your sign-in session. Please sign in again.");
+      return;
+    }
+
     setInput("");
     setError(null);
     setIsBusy(true);
@@ -50,7 +63,10 @@ export default function Home() {
     try {
       await fetchEventSource(`${apiUrl}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ message: trimmed, session_id: sessionId }),
         signal: controller.signal,
         openWhenHidden: true,
@@ -124,21 +140,38 @@ export default function Home() {
       <section className="mx-auto max-w-[1440px]">
         <AppHeader onRestart={restart} />
 
-        <div className="grid items-stretch gap-4 min-[1181px]:grid-cols-[minmax(320px,420px)_minmax(260px,340px)_minmax(0,1fr)] max-[1180px]:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] max-[760px]:grid-cols-1">
-          <ChatPanel
-            error={error}
-            examples={examples}
-            input={input}
-            isBusy={isBusy}
-            messages={messages}
-            onExampleClick={(message) => void submitMessage(message)}
-            onInputChange={setInput}
-            onSubmit={handleSubmit}
-            placeholder={placeholder}
-          />
-          <StatusPanel statusLog={statusLog} />
-          <ReportPanel report={report} />
-        </div>
+        {!isSignedIn ? (
+          <section className="mb-4 rounded-lg border border-[#d8e0ea] bg-white px-4 py-3.5 text-[#142033] shadow-[0_10px_30px_rgba(15,23,42,0.06)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="m-0 leading-snug">
+                Sign in to run research and save completed reports.
+              </p>
+              <SignInButton mode="modal">
+                <button className="rounded-lg border border-teal-700 bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:border-teal-800 hover:bg-teal-800">
+                  Sign in
+                </button>
+              </SignInButton>
+            </div>
+          </section>
+        ) : null}
+
+        {isSignedIn ? (
+          <div className="grid items-stretch gap-4 min-[1181px]:grid-cols-[minmax(320px,420px)_minmax(260px,340px)_minmax(0,1fr)] max-[1180px]:grid-cols-[minmax(320px,420px)_minmax(0,1fr)] max-[760px]:grid-cols-1">
+            <ChatPanel
+              error={error}
+              examples={examples}
+              input={input}
+              isBusy={isBusy}
+              messages={messages}
+              onExampleClick={(message) => void submitMessage(message)}
+              onInputChange={setInput}
+              onSubmit={handleSubmit}
+              placeholder={placeholder}
+            />
+            <StatusPanel statusLog={statusLog} />
+            <ReportPanel report={report} />
+          </div>
+        ) : null}
       </section>
     </main>
   );

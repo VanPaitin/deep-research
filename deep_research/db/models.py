@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,11 +31,13 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=utc_now,
         server_default=func.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=utc_now,
         onupdate=utc_now,
         server_default=func.now(),
@@ -68,11 +70,13 @@ class Report(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user: Mapped[User] = relationship(back_populates="reports")
 
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=utc_now,
         server_default=func.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
         default=utc_now,
         onupdate=utc_now,
         server_default=func.now(),

@@ -1,21 +1,31 @@
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Literal
-from uuid import uuid4
-
+from typing import Annotated, AsyncGenerator, Literal
+from uuid import UUID, uuid4
+import os
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi_clerk_auth import (
+    ClerkConfig,
+    ClerkHTTPBearer,
+    HTTPAuthorizationCredentials,
+)
 
 load_dotenv(override=True)
 
 from deep_research.agents.clarifier import Clarifier
-from deep_research.db.session import check_database_connection
+from deep_research.auth import fetch_clerk_user
+from deep_research.db.persistence import save_completed_report
+from deep_research.db.queries import upsert_user_from_auth
+from deep_research.db.session import check_database_connection, get_db_session
 from deep_research.research_manager import ResearchManager
 
 
 ClientEventType = Literal["session", "chat", "status", "report", "error", "done"]
+DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
 
 
 class ChatRequest(BaseModel):
@@ -32,6 +42,7 @@ class ChatEvent(BaseModel):
 @dataclass
 class ResearchSession:
     id: str = field(default_factory=lambda: uuid4().hex)
+    user_id: UUID | None = None
     clarifier: Clarifier = field(default_factory=Clarifier)
     research_manager: ResearchManager | None = None
 
@@ -55,6 +66,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Clerk authentication setup
+    clerk_config = ClerkConfig(jwks_url=os.getenv("CLERK_JWKS_URL"))
+    clerk_guard = ClerkHTTPBearer(clerk_config)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -66,8 +80,22 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.post("/api/chat")
-    async def chat(request: ChatRequest) -> StreamingResponse:
-        session = get_session(request.session_id)
+    async def chat(
+        request: ChatRequest,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> StreamingResponse:
+        external_auth_id = creds.decoded["sub"]
+        clerk_user = await fetch_clerk_user(external_auth_id)
+        user = await upsert_user_from_auth(
+            db_session,
+            external_auth_id=external_auth_id,
+            email=clerk_user.email,
+            name=clerk_user.name,
+        )
+        await db_session.commit()
+
+        session = get_session(request.session_id, user.id)
         return StreamingResponse(
             stream_chat(session, request.message),
             media_type="text/event-stream",
@@ -81,11 +109,17 @@ def create_app() -> FastAPI:
     return app
 
 
-def get_session(session_id: str | None) -> ResearchSession:
+def get_session(session_id: str | None, user_id: UUID) -> ResearchSession:
     if session_id and session_id in sessions:
-        return sessions[session_id]
+        session = sessions[session_id]
+        if session.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This research session belongs to another user.",
+            )
+        return session
 
-    session = ResearchSession()
+    session = ResearchSession(user_id=user_id)
     sessions[session.id] = session
     return session
 
@@ -144,10 +178,39 @@ async def handle_user_input(
     yield event(session, "status", "Please wait while we perform the research...")
 
     try:
+        final_report = ""
         async for chunk in session.research_manager.run():
+            if chunk["type"] == "report":
+                final_report = chunk["content"]
             yield event(session, chunk["type"], chunk["content"])
     except Exception as exc:
         yield event(session, "error", f"Research failed: {exc}")
+        session.reset()
+        return
+
+    if not final_report:
+        yield event(session, "error", "Research finished without a report to save.")
+        session.reset()
+        return
+
+    if session.user_id is None:
+        yield event(session, "error", "Research completed without a signed-in user.")
+        session.reset()
+        return
+
+    try:
+        await save_completed_report(
+            user_id=session.user_id,
+            query=session.research_manager.query,
+            clarifying_questions=session.research_manager.clarifying_questions,
+            clarifying_answers=session.research_manager.clarifying_answers,
+            content_markdown=final_report,
+        )
+        yield event(session, "status", "Report saved.")
+    except Exception as exc:
+        yield event(
+            session, "error", f"Research completed but could not be saved: {exc}"
+        )
         session.reset()
         return
 

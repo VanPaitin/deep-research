@@ -6,6 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from deep_research.db.models import Report, User
 
 
+async def get_user_by_external_auth_id(
+    session: AsyncSession,
+    external_auth_id: str,
+) -> User | None:
+    result = await session.execute(
+        select(User).where(User.external_auth_id == external_auth_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     result = await session.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
@@ -20,6 +30,34 @@ async def create_user(
 ) -> User:
     user = User(email=email, name=name, external_auth_id=external_auth_id)
     session.add(user)
+    await session.flush()
+    return user
+
+
+async def upsert_user_from_auth(
+    session: AsyncSession,
+    *,
+    external_auth_id: str,
+    email: str | None,
+    name: str | None,
+) -> User:
+    user = await get_user_by_external_auth_id(session, external_auth_id)
+
+    if user is None and email is not None:
+        user = await get_user_by_email(session, email)
+
+    if user is None:
+        user = User(
+            external_auth_id=external_auth_id,
+            email=email,
+            name=name,
+        )
+        session.add(user)
+    else:
+        user.external_auth_id = external_auth_id
+        user.email = email
+        user.name = name
+
     await session.flush()
     return user
 

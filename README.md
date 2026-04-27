@@ -21,7 +21,11 @@ Set these variables before running:
 - `OPENAI_API_KEY`
 - `BRAVE_API_KEY`
 - `PUSHOVER_USER` and `PUSHOVER_TOKEN` if you want real push notifications
-- `DATABASE_URL`, for example `postgresql://postgres:postgres@localhost:5432/deep_research`
+- `DATABASE_URL`, for example `postgresql://postgres:password@localhost:5432/deep_research`
+- `CLERK_SECRET_KEY`
+- `CLERK_JWKS_URL`, for example `https://your-app.clerk.accounts.dev/.well-known/jwks.json`
+
+The frontend also needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Put it in `frontend/.env.local`.
 
 ## Database
 

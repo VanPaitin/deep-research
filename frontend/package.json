@@ -12,6 +12,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.2.7",
     "@microsoft/fetch-event-source": "^2.0.1",
     "lucide-react": "^0.468.0",
     "next": "^15.0.0",
