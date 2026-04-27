@@ -9,7 +9,6 @@ from agents.mcp import MCPServerStdio
 from deep_research.agents.planner import Planner
 from deep_research.agents.searcher import Searcher
 from deep_research.agents.writer import Writer
-from deep_research.services.notification import Notification
 
 
 class ResearchEvent(TypedDict):
@@ -116,7 +115,4 @@ class ResearchManager:
                 async for report in self.writer.run(search_results):
                     yield {"type": "report", "content": report}
 
-                yield {"type": "chat", "content": "Report written, sending push notification..."}
-
-                await Notification.push(report)
-                yield {"type": "chat", "content": "Push notification sent, research complete."}
+                yield {"type": "chat", "content": "Report written."}

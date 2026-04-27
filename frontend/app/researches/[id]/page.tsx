@@ -1,7 +1,7 @@
 "use client";
 
 import { SignInButton, useAuth } from "@clerk/nextjs";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Mail } from "lucide-react";
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import Markdown from "react-markdown";
@@ -22,7 +22,9 @@ export default function ResearchPage({ params }: ResearchPageProps) {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const [research, setResearch] = useState<ResearchDetail | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isEmailing, setIsEmailing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailStatus, setEmailStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
@@ -70,6 +72,37 @@ export default function ResearchPage({ params }: ResearchPageProps) {
     };
   }, [getToken, isLoaded, isSignedIn, researchId]);
 
+  async function emailReport() {
+    if (!isSignedIn || isEmailing) {
+      return;
+    }
+
+    setIsEmailing(true);
+    setEmailStatus(null);
+    setError(null);
+
+    try {
+      const token = await getToken();
+      const response = await fetch(`${apiUrl}/api/reports/${researchId}/email`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Request failed with status ${response.status}`);
+      }
+
+      setEmailStatus("Report sent to your email.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setIsEmailing(false);
+    }
+  }
+
   return (
     <main className="min-h-screen p-6 max-[760px]:p-3.5">
       <section className="mx-auto max-w-[1040px]">
@@ -103,15 +136,35 @@ export default function ResearchPage({ params }: ResearchPageProps) {
 
               {research ? (
                 <div>
-                  <h2 className="m-0 text-2xl leading-tight">
-                    {research.title || research.query}
-                  </h2>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <h2 className="m-0 text-2xl leading-tight">
+                      {research.title || research.query}
+                    </h2>
+                    <button
+                      className="inline-flex items-center gap-2 rounded-lg border border-teal-700 bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:border-teal-800 hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isEmailing}
+                      onClick={emailReport}
+                      type="button"
+                    >
+                      {isEmailing ? (
+                        <Loader2 className="animate-spin" size={16} />
+                      ) : (
+                        <Mail size={16} />
+                      )}
+                      <span>{isEmailing ? "Sending" : "Email report"}</span>
+                    </button>
+                  </div>
                   <p className="m-0 mt-2 text-sm leading-6 text-slate-500">
                     {research.query}
                   </p>
                   <time className="mt-3 block text-sm text-slate-500">
                     {formatDate(research.created_at)}
                   </time>
+                  {emailStatus ? (
+                    <p className="m-0 mt-3 rounded-lg border border-[#b9d5d1] bg-[#e8f5f3] px-3 py-2 text-sm text-teal-900">
+                      {emailStatus}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </header>

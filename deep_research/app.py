@@ -19,6 +19,7 @@ from fastapi_clerk_auth import (
 load_dotenv(override=True)
 
 from deep_research.agents.clarifier import Clarifier
+from deep_research.agents.email_agent import send_report_email
 from deep_research.auth import fetch_clerk_user
 from deep_research.db.persistence import save_completed_report
 from deep_research.db.models import Report, User
@@ -58,6 +59,10 @@ class ReportDetail(ReportSummary):
     clarifying_questions: list[str]
     clarifying_answers: list[str]
     content_markdown: str
+
+
+class EmailReportResponse(BaseModel):
+    status: str
 
 
 @dataclass
@@ -147,6 +152,39 @@ def create_app() -> FastAPI:
             )
 
         return report_detail_response(report)
+
+    @app.post("/api/reports/{report_id}/email", response_model=EmailReportResponse)
+    async def email_report(
+        report_id: UUID,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> EmailReportResponse:
+        user = await get_authenticated_user(creds, db_session)
+
+        if not user.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Your account does not have an email address.",
+            )
+
+        report = await get_report_for_user(
+            db_session,
+            report_id=report_id,
+            user_id=user.id,
+        )
+
+        if report is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Report not found.",
+            )
+
+        await send_report_email(
+            recipient_email=user.email,
+            report_title=report.title or report.query,
+            report_markdown=report.content_markdown,
+        )
+        return EmailReportResponse(status="sent")
 
     return app
 

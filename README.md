@@ -24,6 +24,7 @@ Set these variables before running:
 - `DATABASE_URL`, for example `postgresql://postgres:password@localhost:5432/deep_research`
 - `CLERK_SECRET_KEY`
 - `CLERK_JWKS_URL`, for example `https://your-app.clerk.accounts.dev/.well-known/jwks.json`
+- `SENDGRID_API_KEY` and `SENDGRID_FROM_EMAIL` if users should email saved reports
 
 The frontend also needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Put it in `frontend/.env.local`.
 
