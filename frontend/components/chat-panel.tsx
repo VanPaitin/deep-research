@@ -1,4 +1,6 @@
-import { FormEvent } from "react";
+"use client";
+
+import { FormEvent, useEffect, useRef } from "react";
 import { Send, Sparkles } from "lucide-react";
 
 import { Message } from "../lib/types";
@@ -27,6 +29,37 @@ export function ChatPanel({
   onSubmit,
   onExampleClick,
 }: ChatPanelProps) {
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const shouldFollowRef = useRef(true);
+
+  useEffect(() => {
+    if (shouldFollowRef.current) {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    const lastMessage = messages.at(-1);
+
+    if (!isBusy && lastMessage?.role === "assistant") {
+      inputRef.current?.focus();
+    }
+  }, [isBusy, messages]);
+
+  function handleMessagesScroll() {
+    const element = messagesRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    shouldFollowRef.current = distanceFromBottom < 80;
+  }
+
   return (
     <Panel label="Research chat">
       <PanelHeading>
@@ -34,7 +67,11 @@ export function ChatPanel({
         <span>Research brief</span>
       </PanelHeading>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-[18px]">
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-[18px]"
+        onScroll={handleMessagesScroll}
+        ref={messagesRef}
+      >
         {messages.length === 0 ? (
           <EmptyChat examples={examples} onExampleClick={onExampleClick} />
         ) : (
@@ -45,6 +82,7 @@ export function ChatPanel({
             />
           ))
         )}
+        <div ref={bottomRef} />
       </div>
 
       {error ? (
@@ -69,6 +107,7 @@ export function ChatPanel({
             }
           }}
           placeholder={placeholder}
+          ref={inputRef}
           value={input}
         />
         <button

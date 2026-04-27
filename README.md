@@ -21,6 +21,23 @@ Set these variables before running:
 - `OPENAI_API_KEY`
 - `BRAVE_API_KEY`
 - `PUSHOVER_USER` and `PUSHOVER_TOKEN` if you want real push notifications
+- `DATABASE_URL`, for example `postgresql://postgres:postgres@localhost:5432/deep_research`
+
+## Database
+
+The backend uses SQLAlchemy with async Postgres access through `asyncpg`.
+
+Create your local database, set `DATABASE_URL`, then run migrations:
+
+```bash
+uv run alembic upgrade head
+```
+
+To check the app can reach Postgres:
+
+```bash
+curl http://127.0.0.1:8000/health/db
+```
 
 ## Run
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 load_dotenv(override=True)
 
 from deep_research.agents.clarifier import Clarifier
+from deep_research.db.session import check_database_connection
 from deep_research.research_manager import ResearchManager
 
 
@@ -57,6 +58,11 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/db")
+    async def database_health() -> dict[str, str]:
+        await check_database_connection()
         return {"status": "ok"}
 
     @app.post("/api/chat")
