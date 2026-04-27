@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
+from datetime import datetime
+import os
 from typing import Annotated, AsyncGenerator, Literal
 from uuid import UUID, uuid4
-import os
+
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +21,12 @@ load_dotenv(override=True)
 from deep_research.agents.clarifier import Clarifier
 from deep_research.auth import fetch_clerk_user
 from deep_research.db.persistence import save_completed_report
-from deep_research.db.queries import upsert_user_from_auth
+from deep_research.db.models import Report, User
+from deep_research.db.queries import (
+    get_report_for_user,
+    list_reports_for_user,
+    upsert_user_from_auth,
+)
 from deep_research.db.session import check_database_connection, get_db_session
 from deep_research.research_manager import ResearchManager
 
@@ -37,6 +44,20 @@ class ChatEvent(BaseModel):
     type: ClientEventType
     content: str
     session_id: str
+
+
+class ReportSummary(BaseModel):
+    id: UUID
+    title: str | None
+    query: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportDetail(ReportSummary):
+    clarifying_questions: list[str]
+    clarifying_answers: list[str]
+    content_markdown: str
 
 
 @dataclass
@@ -85,16 +106,7 @@ def create_app() -> FastAPI:
         db_session: DatabaseSession,
         creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
     ) -> StreamingResponse:
-        external_auth_id = creds.decoded["sub"]
-        clerk_user = await fetch_clerk_user(external_auth_id)
-        user = await upsert_user_from_auth(
-            db_session,
-            external_auth_id=external_auth_id,
-            email=clerk_user.email,
-            name=clerk_user.name,
-        )
-        await db_session.commit()
-
+        user = await get_authenticated_user(creds, db_session)
         session = get_session(request.session_id, user.id)
         return StreamingResponse(
             stream_chat(session, request.message),
@@ -106,7 +118,76 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/api/reports", response_model=list[ReportSummary])
+    async def reports_index(
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> list[ReportSummary]:
+        user = await get_authenticated_user(creds, db_session)
+        reports = await list_reports_for_user(db_session, user.id)
+        return [report_summary(report) for report in reports]
+
+    @app.get("/api/reports/{report_id}", response_model=ReportDetail)
+    async def report_detail(
+        report_id: UUID,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> ReportDetail:
+        user = await get_authenticated_user(creds, db_session)
+        report = await get_report_for_user(
+            db_session,
+            report_id=report_id,
+            user_id=user.id,
+        )
+
+        if report is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Report not found.",
+            )
+
+        return report_detail_response(report)
+
     return app
+
+
+async def get_authenticated_user(
+    creds: HTTPAuthorizationCredentials,
+    db_session: AsyncSession,
+) -> User:
+    external_auth_id = creds.decoded["sub"]
+    clerk_user = await fetch_clerk_user(external_auth_id)
+    user = await upsert_user_from_auth(
+        db_session,
+        external_auth_id=external_auth_id,
+        email=clerk_user.email,
+        name=clerk_user.name,
+    )
+    await db_session.commit()
+    return user
+
+
+def report_summary(report: Report) -> ReportSummary:
+    return ReportSummary(
+        id=report.id,
+        title=report.title,
+        query=report.query,
+        created_at=report.created_at,
+        updated_at=report.updated_at,
+    )
+
+
+def report_detail_response(report: Report) -> ReportDetail:
+    return ReportDetail(
+        id=report.id,
+        title=report.title,
+        query=report.query,
+        created_at=report.created_at,
+        updated_at=report.updated_at,
+        clarifying_questions=report.clarifying_questions,
+        clarifying_answers=report.clarifying_answers,
+        content_markdown=report.content_markdown,
+    )
 
 
 def get_session(session_id: str | None, user_id: UUID) -> ResearchSession:

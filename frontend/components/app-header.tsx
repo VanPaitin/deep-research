@@ -2,9 +2,10 @@
 
 import { SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 import { RefreshCcw } from "lucide-react";
+import Link from "next/link";
 
 type AppHeaderProps = {
-  onRestart: () => void;
+  onRestart?: () => void;
 };
 
 export function AppHeader({ onRestart }: AppHeaderProps) {
@@ -21,6 +22,12 @@ export function AppHeader({ onRestart }: AppHeaderProps) {
         </h1>
       </div>
       <div className="flex items-center gap-2.5">
+        <Link
+          className="rounded-lg border border-[#d8e0ea] bg-white px-3.5 py-2.5 text-sm font-semibold text-[#142033] no-underline hover:border-teal-700 hover:text-teal-700"
+          href="/researches"
+        >
+          Researches
+        </Link>
         {!isSignedIn ? (
           <SignInButton mode="modal">
             <button className="rounded-lg border border-teal-700 bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white hover:border-teal-800 hover:bg-teal-800">
@@ -30,13 +37,15 @@ export function AppHeader({ onRestart }: AppHeaderProps) {
         ) : (
           <UserButton />
         )}
-        <button
-          className="inline-flex size-11 items-center justify-center rounded-lg border border-[#d8e0ea] bg-white text-[#142033] hover:border-teal-700 hover:text-teal-700"
-          onClick={onRestart}
-          title="Restart"
-        >
-          <RefreshCcw size={18} />
-        </button>
+        {onRestart ? (
+          <button
+            className="inline-flex size-11 items-center justify-center rounded-lg border border-[#d8e0ea] bg-white text-[#142033] hover:border-teal-700 hover:text-teal-700"
+            onClick={onRestart}
+            title="Restart"
+          >
+            <RefreshCcw size={18} />
+          </button>
+        ) : null}
       </div>
     </header>
   );
