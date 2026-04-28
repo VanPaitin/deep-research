@@ -34,6 +34,10 @@ from deep_research.research_manager import ResearchManager
 
 ClientEventType = Literal["session", "chat", "status", "report", "error", "done"]
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 
 class ChatRequest(BaseModel):
@@ -84,10 +88,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Deep Research API")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ],
+        allow_origins=get_allowed_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -187,6 +188,19 @@ def create_app() -> FastAPI:
         return EmailReportResponse(status="sent")
 
     return app
+
+
+def get_allowed_origins() -> list[str]:
+    configured_origins = os.getenv("ALLOWED_ORIGINS")
+    if not configured_origins:
+        return DEFAULT_ALLOWED_ORIGINS
+
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ]
+    return origins or DEFAULT_ALLOWED_ORIGINS
 
 
 async def get_authenticated_user(

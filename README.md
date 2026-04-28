@@ -25,8 +25,9 @@ Set these variables before running:
 - `CLERK_SECRET_KEY`
 - `CLERK_JWKS_URL`, for example `https://your-app.clerk.accounts.dev/.well-known/jwks.json`
 - `SENDGRID_API_KEY` and `SENDGRID_FROM_EMAIL` if users should email saved reports
+- `ALLOWED_ORIGINS`, a comma-separated list of frontend origins allowed to call the backend, for example `http://localhost:3000,https://your-frontend.example.com`
 
-The frontend also needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`. Put it in `frontend/.env.local`.
+The frontend also needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `NEXT_PUBLIC_API_URL`. Put them in `frontend/.env.local`.
 
 ## Database
 
