@@ -1,14 +1,14 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+import asyncio
 import os
-from typing import Annotated, AsyncGenerator, Literal
+import time
+from typing import Annotated, AsyncGenerator
 from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi_clerk_auth import (
     ClerkConfig,
@@ -22,51 +22,40 @@ from deep_research.agents.clarifier import Clarifier
 from deep_research.agents.email_agent import send_report_email
 from deep_research.auth import fetch_clerk_user
 from deep_research.db.persistence import save_completed_report
-from deep_research.db.models import Report, User
+from deep_research.db.models import Report, ResearchEvent, ResearchJob, User
 from deep_research.db.queries import (
+    append_research_event,
+    create_research_job,
     get_report_for_user,
+    get_research_job_for_user,
+    list_research_events_after,
     list_reports_for_user,
     upsert_user_from_auth,
 )
-from deep_research.db.session import check_database_connection, get_db_session
+from deep_research.db.session import (
+    check_database_connection,
+    get_db_session,
+    get_sessionmaker,
+)
 from deep_research.research_manager import ResearchManager
+from deep_research.schemas import (
+    ChatEvent,
+    ChatRequest,
+    EmailReportResponse,
+    ReportDetail,
+    ReportSummary,
+    ResearchJobCreateRequest,
+    ResearchJobEventResponse,
+    ResearchJobMessageRequest,
+    ResearchJobResponse,
+)
 
-
-ClientEventType = Literal["session", "chat", "status", "report", "error", "done"]
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
+STREAM_RECONNECT_AFTER_SECONDS = 95
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-
-
-class ChatRequest(BaseModel):
-    message: str
-    session_id: str | None = None
-
-
-class ChatEvent(BaseModel):
-    type: ClientEventType
-    content: str
-    session_id: str
-
-
-class ReportSummary(BaseModel):
-    id: UUID
-    title: str | None
-    query: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class ReportDetail(ReportSummary):
-    clarifying_questions: list[str]
-    clarifying_answers: list[str]
-    content_markdown: str
-
-
-class EmailReportResponse(BaseModel):
-    status: str
 
 
 @dataclass
@@ -116,6 +105,181 @@ def create_app() -> FastAPI:
         session = get_session(request.session_id, user.id)
         return StreamingResponse(
             stream_chat(session, request.message),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/research-jobs", response_model=ResearchJobResponse)
+    async def create_job(
+        request: ResearchJobCreateRequest,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> ResearchJobResponse:
+        user = await get_authenticated_user(creds, db_session)
+        query = request.query.strip()
+        if not query:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Enter a research topic.",
+            )
+
+        clarifier = Clarifier()
+        await clarifier.run(query)
+        if clarifier.exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=clarifier.exception,
+            )
+
+        questions = list(clarifier.questions or [])
+        job = await create_research_job(
+            db_session,
+            user_id=user.id,
+            query=query,
+            clarifying_questions=questions,
+        )
+        first_question = (
+            questions[0] if questions else "What would you like to clarify?"
+        )
+        events = [
+            await append_research_event(
+                db_session,
+                job_id=job.id,
+                event_type="chat",
+                content=first_question,
+            ),
+            await append_research_event(
+                db_session,
+                job_id=job.id,
+                event_type="status",
+                content="Clarifying questions started (1/3).",
+            ),
+        ]
+        await db_session.commit()
+        return ResearchJobResponse(
+            id=job.id,
+            status=job.status,
+            events=[research_event_response(event) for event in events],
+        )
+
+    @app.post(
+        "/api/research-jobs/{job_id}/messages",
+        response_model=ResearchJobResponse,
+    )
+    async def answer_job_message(
+        job_id: UUID,
+        request: ResearchJobMessageRequest,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+    ) -> ResearchJobResponse:
+        user = await get_authenticated_user(creds, db_session)
+        job = await get_research_job_for_user(
+            db_session,
+            job_id=job_id,
+            user_id=user.id,
+        )
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Research job not found.",
+            )
+        if job.status != "clarifying":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This research job is already running.",
+            )
+
+        answer = request.message.strip()
+        if not answer:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Enter an answer before continuing.",
+            )
+
+        answers = [*job.clarifying_answers, answer]
+        job.clarifying_answers = answers
+        events: list[ResearchEvent] = []
+
+        if len(answers) < len(job.clarifying_questions):
+            events.append(
+                await append_research_event(
+                    db_session,
+                    job_id=job.id,
+                    event_type="chat",
+                    content=job.clarifying_questions[len(answers)],
+                )
+            )
+            events.append(
+                await append_research_event(
+                    db_session,
+                    job_id=job.id,
+                    event_type="status",
+                    content=f"Clarifying answer recorded ({len(answers)}/3).",
+                )
+            )
+        else:
+            job.status = "running"
+            events.append(
+                await append_research_event(
+                    db_session,
+                    job_id=job.id,
+                    event_type="status",
+                    content="Clarifying answers recorded (3/3).",
+                )
+            )
+            events.append(
+                await append_research_event(
+                    db_session,
+                    job_id=job.id,
+                    event_type="chat",
+                    content="All clarifying questions answered. Starting research...",
+                )
+            )
+            events.append(
+                await append_research_event(
+                    db_session,
+                    job_id=job.id,
+                    event_type="status",
+                    content="Please wait while we perform the research...",
+                )
+            )
+
+        await db_session.commit()
+
+        if job.status == "running":
+            asyncio.create_task(run_research_job(job.id, user.id))
+
+        return ResearchJobResponse(
+            id=job.id,
+            status=job.status,
+            events=[research_event_response(event) for event in events],
+        )
+
+    @app.get("/api/research-jobs/{job_id}/stream")
+    async def stream_job(
+        job_id: UUID,
+        db_session: DatabaseSession,
+        creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
+        after: int = 0,
+    ) -> StreamingResponse:
+        user = await get_authenticated_user(creds, db_session)
+        job = await get_research_job_for_user(
+            db_session,
+            job_id=job_id,
+            user_id=user.id,
+        )
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Research job not found.",
+            )
+
+        return StreamingResponse(
+            stream_research_job_events(job.id, user.id, after),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -240,6 +404,183 @@ def report_detail_response(report: Report) -> ReportDetail:
         clarifying_answers=report.clarifying_answers,
         content_markdown=report.content_markdown,
     )
+
+
+def research_event_response(event: ResearchEvent) -> ResearchJobEventResponse:
+    return ResearchJobEventResponse(
+        sequence=event.sequence,
+        type=event.type,
+        content=event.content,
+    )
+
+
+async def stream_research_job_events(
+    job_id: UUID,
+    user_id: UUID,
+    after: int,
+) -> AsyncGenerator[str, None]:
+    last_sequence = after
+    started_at = time.monotonic()
+
+    while True:
+        async with get_sessionmaker()() as session:
+            job = await get_research_job_for_user(
+                session,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            if job is None:
+                payload = ResearchJobEventResponse(
+                    sequence=last_sequence,
+                    type="error",
+                    content="Research job not found.",
+                )
+                yield sse(payload)
+                return
+
+            events = await list_research_events_after(
+                session,
+                job_id=job_id,
+                after=last_sequence,
+            )
+            for event in events:
+                last_sequence = event.sequence
+                yield sse(research_event_response(event))
+
+            if job.status in {"completed", "failed"}:
+                return
+
+        yield ": keep-alive\n\n"
+
+        if time.monotonic() - started_at >= STREAM_RECONNECT_AFTER_SECONDS:
+            yield sse(
+                ResearchJobEventResponse(
+                    sequence=last_sequence,
+                    type="reconnect",
+                    content="Reconnect to continue streaming this research.",
+                )
+            )
+            return
+
+        await asyncio.sleep(0.25)
+
+
+def sse(event_response: ResearchJobEventResponse) -> str:
+    return f"data: {event_response.model_dump_json()}\n\n"
+
+
+async def run_research_job(job_id: UUID, user_id: UUID) -> None:
+    final_report = ""
+
+    try:
+        async with get_sessionmaker()() as session:
+            job = await get_research_job_for_user(
+                session,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            if job is None:
+                return
+
+            research_manager = ResearchManager(
+                query=job.query,
+                clarifying_questions=job.clarifying_questions,
+            )
+            research_manager.clarifying_answers = job.clarifying_answers
+
+        async for chunk in research_manager.run():
+            async with get_sessionmaker()() as session:
+                job = await get_research_job_for_user(
+                    session,
+                    job_id=job_id,
+                    user_id=user_id,
+                )
+                if job is None:
+                    return
+
+                if chunk["type"] == "report":
+                    final_report = chunk["content"]
+                    job.report_markdown = final_report
+
+                await append_research_event(
+                    session,
+                    job_id=job_id,
+                    event_type=chunk["type"],
+                    content=chunk["content"],
+                )
+                await session.commit()
+
+        if not final_report:
+            await fail_research_job(
+                job_id, user_id, "Research finished without a report to save."
+            )
+            return
+
+        report = await save_completed_report(
+            user_id=user_id,
+            query=research_manager.query,
+            clarifying_questions=research_manager.clarifying_questions,
+            clarifying_answers=research_manager.clarifying_answers,
+            content_markdown=final_report,
+        )
+
+        async with get_sessionmaker()() as session:
+            job = await get_research_job_for_user(
+                session,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            if job is None:
+                return
+
+            job.status = "completed"
+            job.report_id = report.id
+            job.report_markdown = final_report
+            await append_research_event(
+                session,
+                job_id=job_id,
+                event_type="status",
+                content="Report saved.",
+            )
+            await append_research_event(
+                session,
+                job_id=job_id,
+                event_type="chat",
+                content=(
+                    "Research complete. The report is shown below. "
+                    "Feel free to research another topic."
+                ),
+            )
+            await append_research_event(
+                session,
+                job_id=job_id,
+                event_type="done",
+                content="Research complete.",
+            )
+            await session.commit()
+    except Exception as exc:
+        await fail_research_job(job_id, user_id, f"Research failed: {exc}")
+
+
+async def fail_research_job(job_id: UUID, user_id: UUID, message: str) -> None:
+    async with get_sessionmaker()() as session:
+        job = await get_research_job_for_user(
+            session,
+            job_id=job_id,
+            user_id=user_id,
+        )
+        if job is None:
+            return
+
+        job.status = "failed"
+        job.error = message
+        await append_research_event(
+            session,
+            job_id=job_id,
+            event_type="error",
+            content=message,
+        )
+        await session.commit()
 
 
 def get_session(session_id: str | None, user_id: UUID) -> ResearchSession:

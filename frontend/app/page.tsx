@@ -8,7 +8,7 @@ import { AppHeader } from "../components/app-header";
 import { ChatPanel } from "../components/chat-panel";
 import { ReportPanel } from "../components/report-panel";
 import { StatusPanel } from "../components/status-panel";
-import { ApiEvent, Message } from "../lib/types";
+import { ApiEvent, Message, ResearchJobResponse } from "../lib/types";
 
 const examples = [
   "What are the effects of AI on the software engineering industry?",
@@ -19,7 +19,7 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export default function Home() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [statusLog, setStatusLog] = useState<string[]>([]);
   const [report, setReport] = useState("");
@@ -27,6 +27,7 @@ export default function Home() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lastSequenceRef = useRef(0);
 
   const placeholder = useMemo(() => {
     if (messages.length === 0) {
@@ -61,27 +62,30 @@ export default function Home() {
     abortRef.current = controller;
 
     try {
-      await fetchEventSource(`${apiUrl}/api/chat`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+      const response = await fetch(
+        jobId ? `${apiUrl}/api/research-jobs/${jobId}/messages` : `${apiUrl}/api/research-jobs`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(jobId ? { message: trimmed } : { query: trimmed }),
+          signal: controller.signal,
         },
-        body: JSON.stringify({ message: trimmed, session_id: sessionId }),
-        signal: controller.signal,
-        openWhenHidden: true,
-        async onopen(response) {
-          if (!response.ok) {
-            throw new Error(`Request failed with status ${response.status}`);
-          }
-        },
-        onmessage(event) {
-          handleEvent(JSON.parse(event.data) as ApiEvent);
-        },
-        onerror(err) {
-          throw err;
-        },
-      });
+      );
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const data = await readJson<ResearchJobResponse>(response);
+      setJobId(data.id);
+      data.events.forEach(handleEvent);
+
+      if (data.status === "running") {
+        await streamJob(data.id, token, lastSequenceRef.current);
+      }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
         setError((err as Error).message);
@@ -92,8 +96,47 @@ export default function Home() {
     }
   }
 
+  async function streamJob(id: string, token: string, after: number): Promise<void> {
+    let shouldReconnect = false;
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    await fetchEventSource(`${apiUrl}/api/research-jobs/${id}/stream?after=${after}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+      openWhenHidden: true,
+      async onopen(response) {
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+      },
+      onmessage(event) {
+        if (!event.data.trim()) {
+          return;
+        }
+        const parsed = JSON.parse(event.data) as ApiEvent;
+        if (parsed.type === "reconnect") {
+          shouldReconnect = true;
+          return;
+        }
+        handleEvent(parsed);
+      },
+      onerror(err) {
+        throw err;
+      },
+    });
+
+    if (shouldReconnect && !controller.signal.aborted) {
+      await streamJob(id, token, lastSequenceRef.current);
+    }
+  }
+
   function handleEvent(event: ApiEvent) {
-    setSessionId(event.session_id);
+    if (typeof event.sequence === "number") {
+      lastSequenceRef.current = Math.max(lastSequenceRef.current, event.sequence);
+    }
 
     if (event.type === "chat") {
       setMessages((current) => [
@@ -126,7 +169,8 @@ export default function Home() {
 
   function restart() {
     abortRef.current?.abort();
-    setSessionId(null);
+    setJobId(null);
+    lastSequenceRef.current = 0;
     setMessages([]);
     setStatusLog([]);
     setReport("");
@@ -175,4 +219,27 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+async function readError(response: Response) {
+  const text = await response.text();
+  if (!text) {
+    return `Request failed with status ${response.status}`;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as { detail?: string };
+    return parsed.detail || text;
+  } catch {
+    return text;
+  }
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new Error("The server returned an empty response.");
+  }
+
+  return JSON.parse(text) as T;
 }

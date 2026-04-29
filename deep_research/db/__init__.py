@@ -1,4 +1,4 @@
-from deep_research.db.models import Report, User
+from deep_research.db.models import Report, ResearchEvent, ResearchJob, User
 from deep_research.db.queries import (
     create_report,
     create_user,
@@ -12,6 +12,8 @@ from deep_research.db.session import get_db_session
 
 __all__ = [
     "Report",
+    "ResearchEvent",
+    "ResearchJob",
     "User",
     "create_report",
     "create_user",
