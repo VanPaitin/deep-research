@@ -3,7 +3,7 @@ from typing import Dict
 
 import sendgrid
 from sendgrid.helpers.mail import Email, Mail, Content, To
-from agents import Agent, Runner, function_tool
+from agents import Agent, Runner, function_tool, gen_trace_id, trace
 
 
 @function_tool
@@ -73,11 +73,15 @@ async def send_report_email(
     report_title: str,
     report_markdown: str,
 ) -> None:
-    await Runner.run(
-        email_agent,
-        (
-            f"Send this research report to {recipient_email}.\n\n"
-            f"Report title: {report_title}\n\n"
-            f"Report body:\n{report_markdown}"
-        ),
-    )
+    trace_id = gen_trace_id()
+    with trace("Email report trace", trace_id=trace_id):
+        trace_url = f"https://platform.openai.com/traces/trace?trace_id={trace_id}"
+        print(f"Email report trace: {trace_url}")
+        await Runner.run(
+            email_agent,
+            (
+                f"Send this research report to {recipient_email}.\n\n"
+                f"Report title: {report_title}\n\n"
+                f"Report body:\n{report_markdown}"
+            ),
+        )
