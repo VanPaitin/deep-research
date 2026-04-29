@@ -8,6 +8,10 @@ The app uses a job-based workflow so long research runs are not tied to one
 fragile HTTP request. Research progress and report chunks are persisted in
 Postgres, and the frontend reconnects to the stream when needed.
 
+## Live Demo
+
+Try the deployed app at [https://deep-research.app](https://deep-research.app).
+
 ## Stack
 
 - FastAPI backend
